@@ -62,6 +62,26 @@ def conv2d(input_, output_dim,
 
     return conv
 
+def noise_conv2d(input_, output_dim,
+       k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02,
+       name="noise_conv2d"):
+  with tf.variable_scope(name):
+    w = tf.get_variable('w', [k_h, k_w, input_.get_shape()[-1], output_dim],
+              initializer=tf.truncated_normal_initializer(stddev=stddev))
+    mean = tf.reduce_mean(w,keep_dims=True)
+    std = tf.sqrt(tf.reduce_mean(tf.square(w-mean)))
+    noise = tf.random_normal([k_h, k_w, tf.shape(input_)[-1], output_dim], 0.0, std)
+    alpha_w = tf.get_variable('alpha_w', [1,1,1,output_dim], initializer=tf.constant_initializer(0.25))
+    w = w + tf.multiply(noise, alpha_w)
+
+
+    conv = tf.nn.conv2d(input_, w, strides=[1, d_h, d_w, 1], padding='SAME')
+
+    biases = tf.get_variable('biases', [output_dim], initializer=tf.constant_initializer(0.0))
+    conv = tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape())
+
+    return conv
+
 def deconv2d(input_, output_shape,
        k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02,
        name="deconv2d", with_w=False):
@@ -69,7 +89,37 @@ def deconv2d(input_, output_shape,
     # filter : [height, width, output_channels, in_channels]
     w = tf.get_variable('w', [k_h, k_w, output_shape[-1], input_.get_shape()[-1]],
               initializer=tf.random_normal_initializer(stddev=stddev))
-    
+
+    try:
+      deconv = tf.nn.conv2d_transpose(input_, w, output_shape=output_shape,
+                strides=[1, d_h, d_w, 1])
+
+    # Support for verisons of TensorFlow before 0.7.0
+    except AttributeError:
+      deconv = tf.nn.deconv2d(input_, w, output_shape=output_shape,
+                strides=[1, d_h, d_w, 1])
+
+    biases = tf.get_variable('biases', [output_shape[-1]], initializer=tf.constant_initializer(0.0))
+    deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
+
+    if with_w:
+      return deconv, w, biases
+    else:
+      return deconv
+
+def noise_deconv2d(input_, output_shape,
+       k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02,
+       name="deconv2d", with_w=False):
+  with tf.variable_scope(name):
+    # filter : [height, width, output_channels, in_channels]
+    w = tf.get_variable('w', [k_h, k_w, output_shape[-1], input_.get_shape()[-1]],
+              initializer=tf.random_normal_initializer(stddev=stddev))
+    mean = tf.reduce_mean(w, keep_dims=True)
+    std = tf.sqrt(tf.reduce_mean(tf.square(w - mean)))
+    noise = tf.random_normal([k_h, k_w, output_shape, tf.shape(input_)[-1]], 0.0, std)
+    alpha_w = tf.get_variable('alpha_w', [1, 1, output_shape, 1], initializer=tf.constant_initializer(0.25))
+    w = w + tf.multiply(noise, alpha_w)
+
     try:
       deconv = tf.nn.conv2d_transpose(input_, w, output_shape=output_shape,
                 strides=[1, d_h, d_w, 1])
@@ -97,6 +147,29 @@ def linear(input_, output_size, scope=None, stddev=0.02, bias_start=0.0, with_w=
     try:
       matrix = tf.get_variable("Matrix", [shape[1], output_size], tf.float32,
                  tf.random_normal_initializer(stddev=stddev))
+    except ValueError as err:
+        msg = "NOTE: Usually, this is due to an issue with the image dimensions.  Did you correctly set '--crop' or '--input_height' or '--output_height'?"
+        err.args = err.args + (msg,)
+        raise
+    bias = tf.get_variable("bias", [output_size],
+      initializer=tf.constant_initializer(bias_start))
+    if with_w:
+      return tf.matmul(input_, matrix) + bias, matrix, bias
+    else:
+      return tf.matmul(input_, matrix) + bias
+
+def noise_linear(input_, output_size, scope=None, stddev=0.02, bias_start=0.0, with_w=False):
+  shape = input_.get_shape().as_list()
+
+  with tf.variable_scope(scope or "Linear"):
+    try:
+      matrix = tf.get_variable("Matrix", [shape[1], output_size], tf.float32,
+                 tf.random_normal_initializer(stddev=stddev))
+      mean = tf.reduce_mean(matrix, keep_dims=True)
+      std = tf.sqrt(tf.reduce_mean(tf.square(matrix - mean)))
+      noise = tf.random_normal([tf.shape(input_)[-1], output_size], 0.0, std)
+      alpha_w = tf.get_variable('alpha_w', [1, output_size], initializer=tf.constant_initializer(0.25))
+      matrix = matrix + tf.multiply(noise, alpha_w)
     except ValueError as err:
         msg = "NOTE: Usually, this is due to an issue with the image dimensions.  Did you correctly set '--crop' or '--input_height' or '--output_height'?"
         err.args = err.args + (msg,)
